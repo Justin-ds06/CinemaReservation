@@ -313,7 +313,7 @@ function showReceipt(ref) {
   const cashLines = t.method === "Cash" ? line("Cash", money(t.cash)) + line("Change", money(t.change)) : "";
 
   $("receipt").innerHTML =
-    "<h2>ROBINSON CINEMA</h2>" +
+    "<h2>CINEMA SEAT RESERVATION</h2>" +
     '<p class="center">Ticket Receipt</p><hr>' +
     `<div class="ref">${t.ref}</div>` +
     `<p class="center">${safe(t.issued)}</p>` +
