@@ -1,391 +1,579 @@
 "use strict";
 
+/* =====================================================
+   1. DATA  (edit movies, prices and seat layout here)
+   ===================================================== */
+
 const MOVIES = [
-  { id: 1, title: "He's Dating a Boldstar", poster: "images/malupiton.jpg", price: 280, genre: "Romcom", mins: 112, times: ["10:00 AM", "1:30 PM", "7:00 PM"] },
-  { id: 2, title: "Spiderman Brand New Day", poster: "images/spiderman.jpg", price: 280, genre: "Sci-Fi", mins: 124, times: ["11:00 AM", "2:30 PM", "8:00 PM"] },
-  { id: 3, title: "Avengers Doomsday", poster: "images/avengers.jpg", price: 350, genre: "Drama", mins: 105, times: ["12:00 PM", "4:00 PM", "9:00 PM"] }
+  {
+    id: 1,
+    title: "He's Dating a Boldstar",
+    poster: "images/malupiton.jpg",
+    genre: "Romcom",
+    minutes: 112,
+    price: 280,
+    room: 1,
+    times: ["10:00 AM", "1:30 PM", "7:00 PM"],
+    description: "A shy office worker falls for a rising star, and love gets messy and funny."
+  },
+  {
+    id: 2,
+    title: "Spiderman Brand New Day",
+    poster: "images/spiderman.jpg",
+    genre: "Sci-Fi",
+    minutes: 124,
+    price: 280,
+    room: 2,
+    times: ["11:00 AM", "2:30 PM", "8:00 PM"],
+    description: "Peter Parker starts over as a new threat rises in the city."
+  },
+  {
+    id: 3,
+    title: "Avengers Doomsday",
+    poster: "images/avengers.jpg",
+    genre: "Drama",
+    minutes: 105,
+    price: 350,
+    room: 3,
+    times: ["12:00 PM", "4:00 PM", "9:00 PM"],
+    description: "Earth's heroes unite against their most dangerous enemy yet."
+  }
 ];
-const ROWS = "ABCDEFGH".split("");
-const COLS = 10;
-const MAX_SEATS = 80;
-const KEY = "cineseat_reservations";
-const CASHIER_KEY = "cineseat_cashier";
-const NAME_RULE = [v => /^[A-Za-z][A-Za-z .'-]{1,49}$/.test(v), "Enter a valid name (letters only, at least 2 characters)."];
-const RULES = {
-  fName: NAME_RULE,
-  fContact: [v => /^09\d{9}$/.test(v), "Enter an 11-digit number starting with 09."]
+
+// Seat layout: [seats on the left block, seats on the right block]
+// Seat numbers keep counting across the aisle (A: 1-3 left, 4-6 right)
+const LAYOUT = {
+  A: [3, 3],
+  B: [4, 4],
+  C: [4, 4],
+  D: [5, 5],
+  E: [6, 6],
+  F: [6, 6],
+  G: [6, 6],
+  H: [6, 6]
 };
 
-let selected = [];
-let reservations = [];
-let cashier = null;
+/* =====================================================
+   2. VARIABLES
+   ===================================================== */
 
-const $ = id => document.getElementById(id);
-const money = n => "PHP " + n.toLocaleString("en-US");
-const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const currentMovie = () => MOVIES.find(m => m.id === Number($("movie").value));
-const ticketPrice = () => currentMovie().price;
-const slotKey = () => [$("movie").value, $("date").value, $("showtime").value].join("|");
+let transactions = [];     // every sale ever made (saved in the browser)
+let selectedSeats = [];    // seats clicked right now, e.g. ["A1", "A2"]
+let cashier = null;        // { name, counter } of the person signed in
 
-/* ---------- storage ---------- */
+const SALES_KEY = "cinema_transactions";
+const CASHIER_KEY = "cinema_cashier";
+
+// Shortcut so we can write $("id") instead of document.getElementById("id")
+function $(id) {
+  return document.getElementById(id);
+}
+
+/* =====================================================
+   3. SMALL HELPER FUNCTIONS
+   ===================================================== */
+
+// 280 -> "PHP 280.00"
+function money(amount) {
+  return "PHP " + amount.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+// Today's date as "2026-11-10"
+function today() {
+  const d = new Date();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return d.getFullYear() + "-" + month + "-" + day;
+}
+
+// The movie currently chosen in the dropdown
+function currentMovie() {
+  return MOVIES.find(function (m) {
+    return m.id === Number($("movieSelect").value);
+  });
+}
+
+// A text that identifies one show: movie + date + time
+// Used to know which seats are already sold for THIS show
+function showKey() {
+  return $("movieSelect").value + "|" + $("dateInput").value + "|" + $("timeSelect").value;
+}
+
+// Stop HTML tricks in names (e.g. someone typing <b>)
+function safe(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/* =====================================================
+   4. SAVE / LOAD  (localStorage keeps data after refresh)
+   ===================================================== */
+
 function loadData() {
   try {
-    const data = JSON.parse(localStorage.getItem(KEY));
-    reservations = Array.isArray(data) ? data : [];
-  } catch (e) {
-    reservations = [];
-  }
-}
-function saveData() {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(reservations));
-  } catch (e) {
-    showMessage("Could not save data in this browser.", "err");
-  }
-}
-
-/* ---------- start ---------- */
-document.addEventListener("DOMContentLoaded", initApp);
-
-function initApp() {
-  loadData();
-  loadCashier();
-  $("movie").innerHTML = MOVIES.map(m => `<option value="${m.id}">${esc(m.title)}</option>`).join("");
-  const now = new Date();
-  const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  $("date").value = today;
-  $("date").min = today;
-  selectMovie();
-
-  $("movie").addEventListener("change", selectMovie);
-  $("date").addEventListener("change", renderSeatMap);
-  $("showtime").addEventListener("change", renderSeatMap);
-  $("seatMap").addEventListener("click", e => {
-    const btn = e.target.closest(".seat");
-    if (btn && !btn.disabled) toggleSeat(btn);
-  });
-  $("clearBtn").addEventListener("click", clearSelection);
-  $("bookForm").addEventListener("input", e => { if (RULES[e.target.id]) validateField(e.target); });
-  $("bookForm").addEventListener("submit", e => { e.preventDefault(); if (validateForm()) confirmBooking(); });
-  document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
-  $("search").addEventListener("input", renderReservations);
-  $("statusFilter").addEventListener("change", renderReservations);
-  $("resBody").addEventListener("click", e => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    if (b.dataset.act === "cancel") cancelReservation(b.dataset.ref);
-    if (b.dataset.act === "receipt") showReceipt(b.dataset.ref);
-  });
-  $("printBtn").addEventListener("click", () => window.print());
-  $("toResBtn").addEventListener("click", () => { closeModal(); showView("resView"); });
-  $("newBtn").addEventListener("click", () => { closeModal(); showView("bookView"); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
-  $("loginForm").addEventListener("submit", signIn);
-  $("signOutBtn").addEventListener("click", signOut);
-  $("payMethod").addEventListener("change", togglePayment);
-  $("fPaid").addEventListener("input", updateChange);
-  togglePayment();
-  renderReservations();
-}
-
-/* ---------- booking ---------- */
-function selectMovie() {
-  const mv = currentMovie();
-  $("poster").src = mv.poster;
-  $("poster").alt = "Poster of " + mv.title;
-  $("mTitle").textContent = mv.title;
-  $("mInfo").textContent = mv.genre + " | " + mv.mins + " min | " + money(mv.price) + " per seat";
-  $("showtime").innerHTML = currentMovie().times.map(t => `<option>${t}</option>`).join("");
-  renderSeatMap();
-}
-
-function renderSeatMap() {
-  selected = [];
-  const taken = reservations
-    .filter(r => r.status === "Active" && r.key === slotKey())
-    .flatMap(r => r.seats);
-  let html = "";
-  ROWS.forEach(row => {
-    html += `<div class="row"><b>${row}</b>`;
-    for (let n = 1; n <= COLS; n++) {
-      const id = row + n;
-      const isTaken = taken.includes(id);
-      const cls = "seat" + (isTaken ? " taken" : "");
-      html += `<button type="button" class="${cls}" data-seat="${id}" ${isTaken ? "disabled" : ""} aria-label="Seat ${id}">${n}</button>`;
-    }
-    html += "</div>";
-  });
-  $("seatMap").innerHTML = html;
-  updateSummary();
-}
-
-function toggleSeat(btn) {
-  const id = btn.dataset.seat;
-  const i = selected.indexOf(id);
-  if (i > -1) {
-    selected.splice(i, 1);
-    btn.classList.remove("selected");
-    showMessage("", "");
-  } else {
-    if (selected.length >= MAX_SEATS) {
-      showMessage("Maximum of " + MAX_SEATS + " seats per booking.", "err");
-      return;
-    }
-    selected.push(id);
-    btn.classList.add("selected");
-    showMessage("", "");
-  }
-  updateSummary();
-}
-
-function clearSelection() {
-  selected = [];
-  document.querySelectorAll(".seat.selected").forEach(b => b.classList.remove("selected"));
-  showMessage("", "");
-  updateSummary();
-}
-
-function updateSummary() {
-  $("sMovie").textContent = currentMovie().title;
-  $("sWhen").textContent = ($("date").value || "-") + " " + $("showtime").value;
-  $("sPrice").textContent = money(ticketPrice());
-  $("sSeats").textContent = selected.length ? [...selected].sort().join(", ") : "-";
-  $("sTotal").textContent = money(selected.length * ticketPrice());
-  updateChange();
-}
-
-function showMessage(text, type) {
-  const m = $("msg");
-  m.textContent = text;
-  m.className = "hint " + type;
-}
-
-/* ---------- validation ---------- */
-function validateField(el) {
-  const [test, message] = RULES[el.id];
-  if (!el.value.trim()) {              /* optional fields: empty is fine */
-    el.classList.remove("good", "bad");
-    $("e_" + el.id).textContent = "";
-    return true;
-  }
-  const good = test(el.value.trim());
-  el.classList.toggle("bad", !good);
-  el.classList.toggle("good", good);
-  const hint = $("e_" + el.id);
-  hint.textContent = good ? "Looks good." : message;
-  hint.className = "hint " + (good ? "ok" : "err");
-  return good;
-}
-
-function validateForm() {
-  const fieldsOk = Object.keys(RULES).map(id => validateField($(id))).every(Boolean);
-  if (!$("date").value || $("date").value < $("date").min) {
-    showMessage("Please choose today or a future date.", "err");
-    return false;
-  }
-  if (selected.length === 0) {
-    showMessage("Please select at least one seat.", "err");
-    return false;
-  }
-  if (!fieldsOk) {
-    showMessage("Please fix the highlighted fields.", "err");
-    return false;
-  }
-  if ($("payMethod").value === "Cash") {
-    const paid = Number($("fPaid").value);
-    if (!paid || paid < selected.length * ticketPrice()) {
-      showMessage("Amount received must be at least the total.", "err");
-      return false;
-    }
-  }
-  return true;
-}
-
-function confirmBooking() {
-  const seats = [...selected].sort();
-  const next = reservations.reduce((m, r) => Math.max(m, parseInt(r.ref.slice(3), 10)), 0) + 1;
-  const total = seats.length * ticketPrice();
-  const method = $("payMethod").value;
-  const paid = method === "Cash" ? Number($("fPaid").value) : total;
-  const r = {
-    ref: "CS-" + String(next).padStart(4, "0"),
-    key: slotKey(),
-    movie: currentMovie().title,
-    date: $("date").value,
-    showtime: $("showtime").value,
-    name: $("fName").value.trim() || "Walk-in",
-    contact: $("fContact").value.trim(),
-    seats: seats,
-    price: ticketPrice(),
-    total: total,
-    method: method,
-    paid: paid,
-    change: paid - total,
-    cashier: cashier.name,
-    counter: cashier.counter,
-    status: "Active",
-    soldOn: todayISO(),
-    booked: new Date().toLocaleString()
-  };
-  reservations.push(r);
-  saveData();
-  $("bookForm").reset();
-  ["fName", "fContact"].forEach(id => {
-    $(id).classList.remove("good", "bad");
-    $("e_" + id).textContent = "";
-  });
-  togglePayment();
-  renderSeatMap();
-  renderReservations();
-  showReceipt(r.ref);
-}
-
-/* ---------- receipt ---------- */
-function barcode(text) {
-  return [...(text + "|" + text)].map(c => `<i style="width:${1 + (c.charCodeAt(0) % 4)}px"></i>`).join("");
-}
-
-function showReceipt(ref) {
-  const r = reservations.find(x => x.ref === ref);
-  if (!r) return;
-  const unit = r.price || r.total / r.seats.length;
-  const method = r.method || "Cash";
-  const pay = method === "Cash" && r.paid != null
-    ? `<div class="ln"><span>Cash received</span><span>${money(r.paid)}</span></div>
-       <div class="ln"><span>Change</span><span>${money(r.change)}</span></div>` : "";
-  $("receipt").innerHTML = `
-    <img class="rlogo" src="images/logo-bw.svg" alt="">
-    <h2>ROBINSON CINEMA</h2>
-    <p class="c">Ticket Receipt</p>
-    <hr>
-    <div class="big">${esc(r.ref)}</div>
-    <p class="c small">Issued: ${esc(r.booked)}</p>
-    <p class="c small">Cashier: ${esc(r.cashier || "-")} (${esc(r.counter || "-")})</p>
-    <hr>
-    <div class="ln"><span>Customer</span><span>${esc(r.name)}</span></div>
-    ${r.contact ? `<div class="ln"><span>Contact</span><span>${esc(r.contact)}</span></div>` : ""}
-    <div class="ln"><span>Movie</span><span>${esc(r.movie)}</span></div>
-    <div class="ln"><span>Date</span><span>${esc(r.date)}</span></div>
-    <div class="ln"><span>Showtime</span><span>${esc(r.showtime)}</span></div>
-    <div class="ln"><span>Seats</span><span>${esc(r.seats.join(", "))}</span></div>
-    <hr>
-    <div class="ln"><span>Ticket x${r.seats.length} @ ${money(unit)}</span><span>${money(r.total)}</span></div>
-    <hr>
-    <div class="ln tot"><span>TOTAL</span><span>${money(r.total)}</span></div>
-    <div class="ln"><span>Payment</span><span>${esc(method)}</span></div>
-    ${pay}
-    <p class="c">Status: <b>${esc(statusLabel(r.status).toUpperCase())}</b></p>
-    <div class="bars">${barcode(r.ref)}</div>
-    <p class="c small">Present this receipt at the entrance.<br>Please arrive 15 minutes before showtime.<br>Thank you!</p>`;
-  $("modal").hidden = false;
-}
-
-function closeModal() {
-  $("modal").hidden = true;
-}
-
-/* ---------- reservations ---------- */
-function renderReservations() {
-  renderTodaySummary();
-  const q = $("search").value.trim().toLowerCase();
-  const status = $("statusFilter").value;
-  const rows = reservations.filter(r =>
-    (status === "All" || r.status === status) &&
-    (r.name.toLowerCase().includes(q) || r.ref.toLowerCase().includes(q)));
-  $("resBody").innerHTML = rows.length
-    ? rows.map(r => `<tr>
-        <td>${esc(r.ref)}</td><td>${esc(r.name)}</td><td>${esc(r.movie)}</td>
-        <td>${esc(r.date)} ${esc(r.showtime)}</td><td>${esc(r.seats.join(", "))}</td>
-        <td>${money(r.total)}</td><td>${esc(r.method || "Cash")}</td><td>${esc(r.cashier || "-")}</td>
-        <td class="${r.status === "Cancelled" ? "cancelled" : ""}">${statusLabel(r.status)}</td>
-        <td><button data-act="receipt" data-ref="${esc(r.ref)}">Receipt</button>
-        ${r.status === "Active" ? `<button class="danger" data-act="cancel" data-ref="${esc(r.ref)}">Void</button>` : ""}</td>
-      </tr>`).join("")
-    : `<tr><td colspan="10">No transactions found.</td></tr>`;
-}
-
-function renderTodaySummary() {
-  const t = reservations.filter(r => r.status === "Active" && r.soldOn === todayISO());
-  $("stSales").textContent = money(t.reduce((s, r) => s + r.total, 0));
-  $("stTickets").textContent = t.reduce((s, r) => s + r.seats.length, 0);
-  $("stTx").textContent = t.length;
-}
-
-function cancelReservation(ref) {
-  const r = reservations.find(x => x.ref === ref);
-  if (!r || r.status !== "Active") return;
-  if (!confirm("Void transaction " + ref + "? The seats will be released.")) return;
-  r.status = "Cancelled";
-  r.voidedBy = cashier ? cashier.name : "";
-  saveData();
-  renderReservations();
-  renderSeatMap();
-}
-
-function showView(id) {
-  ["bookView", "resView"].forEach(v => { $(v).hidden = v !== id; });
-  $("navBook").classList.toggle("active", id === "bookView");
-  $("navRes").classList.toggle("active", id === "resView");
-  if (id === "resView") renderReservations();
-}
-
-/* ---------- cashier ---------- */
-const todayISO = () => {
-  const n = new Date();
-  return new Date(n.getTime() - n.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-};
-const statusLabel = s => (s === "Active" ? "Paid" : "Voided");
-
-function loadCashier() {
-  try {
+    transactions = JSON.parse(localStorage.getItem(SALES_KEY)) || [];
     cashier = JSON.parse(localStorage.getItem(CASHIER_KEY));
-  } catch (e) {
+  } catch (error) {
+    transactions = [];
     cashier = null;
   }
-  updateCashierUI();
 }
 
-function updateCashierUI() {
-  const signed = !!(cashier && cashier.name);
-  $("login").hidden = signed;
-  $("app").hidden = !signed;
-  if (signed) $("cashierInfo").textContent = "Cashier: " + cashier.name + " | " + cashier.counter;
+function saveTransactions() {
+  localStorage.setItem(SALES_KEY, JSON.stringify(transactions));
 }
 
-function signIn(e) {
-  e.preventDefault();
-  const name = $("cName").value.trim();
-  if (!NAME_RULE[0](name)) {
-    $("e_cName").textContent = "Enter the cashier's name (letters only).";
+/* =====================================================
+   5. SIGN IN / SIGN OUT
+   ===================================================== */
+
+function showCorrectScreen() {
+  const signedIn = cashier !== null;
+  $("loginPage").hidden = signedIn;
+  $("app").hidden = !signedIn;
+
+  if (signedIn) {
+    $("cashierLabel").textContent = "Cashier: " + cashier.name + " | " + cashier.counter;
+    $("counterLabel").textContent = "• Ticket Counter";
+  }
+}
+
+function signIn(event) {
+  event.preventDefault();   // stop the page from reloading
+  const name = $("cashierName").value.trim();
+
+  if (name.length < 2) {
+    $("loginError").textContent = "Please enter the cashier name.";
     return;
   }
-  $("e_cName").textContent = "";
-  cashier = { name: name, counter: $("cCounter").value };
-  try { localStorage.setItem(CASHIER_KEY, JSON.stringify(cashier)); } catch (err) { /* ignore */ }
-  updateCashierUI();
+
+  cashier = { name: name, counter: $("counterSelect").value };
+  localStorage.setItem(CASHIER_KEY, JSON.stringify(cashier));
+  $("loginError").textContent = "";
+  showCorrectScreen();
 }
 
 function signOut() {
   if (!confirm("End your shift and sign out?")) return;
   cashier = null;
-  try { localStorage.removeItem(CASHIER_KEY); } catch (err) { /* ignore */ }
+  localStorage.removeItem(CASHIER_KEY);
+  $("cashierName").value = "";
   clearSelection();
-  closeModal();
-  showView("bookView");
-  $("cName").value = "";
-  updateCashierUI();
+  showPage("sell");
+  showCorrectScreen();
 }
 
-/* ---------- payment ---------- */
-function togglePayment() {
-  const cash = $("payMethod").value === "Cash";
-  $("cashRow").hidden = !cash;
-  $("changeRow").hidden = !cash;
+/* =====================================================
+   6. PAGES (Sell Tickets / Transactions)
+   ===================================================== */
+
+function showPage(name) {
+  $("sellPage").hidden = name !== "sell";
+  $("transPage").hidden = name !== "trans";
+  $("tabSell").classList.toggle("active", name === "sell");
+  $("tabTrans").classList.toggle("active", name === "trans");
+
+  if (name === "trans") showTransactions();
+}
+
+/* =====================================================
+   7. SELL TICKETS PAGE
+   ===================================================== */
+
+// Fill the movie dropdown (runs once)
+function fillMovieDropdown() {
+  let html = "";
+  MOVIES.forEach(function (m) {
+    html += '<option value="' + m.id + '">' + safe(m.title) + "</option>";
+  });
+  $("movieSelect").innerHTML = html;
+}
+
+// Runs when the movie changes: update poster, text, showtimes
+function onMovieChange() {
+  const movie = currentMovie();
+
+  $("moviePoster").src = movie.poster;
+  $("movieTitle").textContent = movie.title;
+  $("movieMeta").textContent = movie.genre + " | " + movie.minutes + " min";
+  $("movieDesc").textContent = movie.description;
+
+  let html = "";
+  movie.times.forEach(function (t) {
+    html += "<option>" + t + "</option>";
+  });
+  $("timeSelect").innerHTML = html;
+
+  drawSeats();
+}
+
+// Get the list of seats already sold for the current show
+function getSoldSeats() {
+  let sold = [];
+  transactions.forEach(function (t) {
+    if (t.status === "Paid" && t.showKey === showKey()) {
+      sold = sold.concat(t.seats);
+    }
+  });
+  return sold;
+}
+
+// Draw all seat buttons
+function drawSeats() {
+  selectedSeats = [];
+  const sold = getSoldSeats();
+  let html = "";
+
+  // Go through each row letter: A, B, C ...
+  for (const letter in LAYOUT) {
+    const leftCount = LAYOUT[letter][0];
+    const rightCount = LAYOUT[letter][1];
+    let number = 1;
+
+    html += '<div class="row"><span class="row-letter">' + letter + "</span>";
+
+    // left block
+    html += '<div class="block left-block">';
+    for (let i = 0; i < leftCount; i++) {
+      html += seatButton(letter, number, sold);
+      number++;
+    }
+    html += "</div>";
+
+    // right block
+    html += '<div class="block right-block">';
+    for (let i = 0; i < rightCount; i++) {
+      html += seatButton(letter, number, sold);
+      number++;
+    }
+    html += "</div></div>";
+  }
+
+  $("seatRows").innerHTML = html;
+
+  // The text under "SCREEN MONITOR"
+  const movie = currentMovie();
+  $("screenSub").textContent = $("timeSelect").value + " @ CINEMA " + movie.room;
+
+  updatePanel();
+}
+
+// One seat button as HTML text
+function seatButton(letter, number, sold) {
+  const id = letter + number;
+  const isSold = sold.includes(id);
+  const css = isSold ? "seat sold" : "seat";
+  const disabled = isSold ? "disabled" : "";
+  return '<button type="button" class="' + css + '" data-seat="' + id + '" ' + disabled + ">" + number + "</button>";
+}
+
+// Runs when a seat is clicked
+function onSeatClick(event) {
+  const button = event.target.closest(".seat");
+  if (!button || button.disabled) return;
+
+  const id = button.dataset.seat;
+
+  if (selectedSeats.includes(id)) {
+    // already selected -> unselect it
+    selectedSeats = selectedSeats.filter(function (s) { return s !== id; });
+    button.classList.remove("selected");
+  } else {
+    selectedSeats.push(id);
+    button.classList.add("selected");
+  }
+  $("sellMessage").textContent = "";
+  updatePanel();
+}
+
+function clearSelection() {
+  selectedSeats = [];
+  document.querySelectorAll(".seat.selected").forEach(function (b) {
+    b.classList.remove("selected");
+  });
+  $("sellMessage").textContent = "";
+  updatePanel();
+}
+
+// Total price = number of seats x price
+function getTotal() {
+  return selectedSeats.length * currentMovie().price;
+}
+
+// Update the grey TRANSACTION box on the right
+function updatePanel() {
+  const movie = currentMovie();
+
+  $("tMovie").textContent = movie.title;
+  $("tWhen").textContent = $("dateInput").value + ", " + $("timeSelect").value;
+  $("tPrice").textContent = money(movie.price);
+  $("tSeats").textContent = selectedSeats.length ? selectedSeats.slice().sort().join(", ") : "-";
+  $("tTotal").textContent = money(getTotal());
+
+  // Cash only: show change
+  $("cashBox").hidden = $("payMethod").value !== "Cash";
   updateChange();
 }
 
 function updateChange() {
-  const total = selected.length * ticketPrice();
-  const paid = Number($("fPaid").value) || 0;
-  $("sChange").textContent = !paid ? "-" : paid >= total ? money(paid - total) : "Insufficient";
+  const cash = Number($("cashInput").value);
+  const total = getTotal();
+
+  if (!cash || !total) {
+    $("tChange").textContent = "-";
+  } else if (cash < total) {
+    $("tChange").textContent = "Short by " + money(total - cash);
+  } else {
+    $("tChange").textContent = money(cash - total);
+  }
 }
+
+/* =====================================================
+   8. CHARGE (check the form, then save the sale)
+   ===================================================== */
+
+function charge() {
+  const total = getTotal();
+  const method = $("payMethod").value;
+  const contact = $("custContact").value.trim();
+  const cash = Number($("cashInput").value);
+
+  // ---- checks ----
+  if (selectedSeats.length === 0) {
+    return showError("Please select at least one seat.");
+  }
+  if ($("dateInput").value < today()) {
+    return showError("You cannot sell tickets for a past date.");
+  }
+  if (contact !== "" && !/^09\d{9}$/.test(contact)) {
+    return showError("Contact number must be 11 digits and start with 09.");
+  }
+  if (method === "Cash" && cash < total) {
+    return showError("Cash received is less than the total.");
+  }
+
+  // ---- create the transaction ----
+  const movie = currentMovie();
+  const sale = {
+    ref: makeRef(),
+    showKey: showKey(),
+    customer: $("custName").value.trim() || "Walk-in",
+    contact: contact,
+    movie: movie.title,
+    date: $("dateInput").value,
+    time: $("timeSelect").value,
+    room: movie.room,
+    seats: selectedSeats.slice().sort(),
+    price: movie.price,
+    total: total,
+    method: method,
+    cash: method === "Cash" ? cash : total,
+    change: method === "Cash" ? cash - total : 0,
+    cashier: cashier.name,
+    counter: cashier.counter,
+    status: "Paid",
+    soldOn: today(),
+    issued: new Date().toLocaleString()
+  };
+
+  transactions.push(sale);
+  saveTransactions();
+
+  // ---- reset the form ----
+  $("custName").value = "";
+  $("custContact").value = "";
+  $("cashInput").value = "";
+  $("sellMessage").textContent = "";
+
+  drawSeats();         // the seats are now blue (sold)
+  showReceipt(sale.ref);
+}
+
+function showError(text) {
+  $("sellMessage").textContent = text;
+}
+
+// Make the next reference: CS-0001, CS-0002, ...
+function makeRef() {
+  let highest = 0;
+  transactions.forEach(function (t) {
+    const n = Number(t.ref.replace("CS-", ""));
+    if (n > highest) highest = n;
+  });
+  return "CS-" + String(highest + 1).padStart(4, "0");
+}
+
+/* =====================================================
+   9. RECEIPT
+   ===================================================== */
+
+function showReceipt(ref) {
+  const t = transactions.find(function (x) { return x.ref === ref; });
+  if (!t) return;
+
+  let cashLines = "";
+  if (t.method === "Cash") {
+    cashLines =
+      '<div class="line"><span>Cash</span><span>' + money(t.cash) + "</span></div>" +
+      '<div class="line"><span>Change</span><span>' + money(t.change) + "</span></div>";
+  }
+
+  $("receipt").innerHTML =
+    "<h2>ROBINSON CINEMA</h2>" +
+    '<p class="center">Ticket Receipt</p><hr>' +
+    '<div class="ref">' + t.ref + "</div>" +
+    '<p class="center">' + safe(t.issued) + "</p>" +
+    '<p class="center">Cashier: ' + safe(t.cashier) + " (" + safe(t.counter) + ")</p><hr>" +
+    '<div class="line"><span>Customer</span><span>' + safe(t.customer) + "</span></div>" +
+    '<div class="line"><span>Movie</span><span>' + safe(t.movie) + "</span></div>" +
+    '<div class="line"><span>Date</span><span>' + t.date + "</span></div>" +
+    '<div class="line"><span>Time</span><span>' + t.time + "</span></div>" +
+    '<div class="line"><span>Cinema</span><span>' + t.room + "</span></div>" +
+    '<div class="line"><span>Seats</span><span>' + t.seats.join(", ") + "</span></div><hr>" +
+    '<div class="line"><span>' + t.seats.length + " x " + money(t.price) + "</span><span>" + money(t.total) + "</span></div>" +
+    '<div class="line bold"><span>TOTAL</span><span>' + money(t.total) + "</span></div>" +
+    '<div class="line"><span>Payment</span><span>' + t.method + "</span></div>" +
+    cashLines +
+    '<p class="center">Status: <b>' + t.status.toUpperCase() + "</b></p><hr>" +
+    '<p class="center">Please arrive 15 minutes before showtime. Thank you!</p>';
+
+  $("receiptModal").hidden = false;
+}
+
+function closeReceipt() {
+  $("receiptModal").hidden = true;
+}
+
+/* =====================================================
+   10. TRANSACTIONS PAGE
+   ===================================================== */
+
+function showTransactions() {
+  // --- top boxes (only today's PAID sales) ---
+  let sales = 0;
+  let tickets = 0;
+  let count = 0;
+
+  transactions.forEach(function (t) {
+    if (t.status === "Paid" && t.soldOn === today()) {
+      sales += t.total;
+      tickets += t.seats.length;
+      count++;
+    }
+  });
+
+  $("statSales").textContent = money(sales);
+  $("statTickets").textContent = tickets;
+  $("statCount").textContent = count;
+
+  // --- table (apply search + status filter) ---
+  const search = $("searchInput").value.trim().toLowerCase();
+  const status = $("statusFilter").value;
+  let rows = "";
+
+  // show newest on top
+  transactions.slice().reverse().forEach(function (t) {
+    const matchStatus = status === "All" || t.status === status;
+    const matchSearch =
+      t.customer.toLowerCase().includes(search) ||
+      t.ref.toLowerCase().includes(search);
+
+    if (!matchStatus || !matchSearch) return;
+
+    const voidButton = t.status === "Paid"
+      ? '<button class="small-btn void" data-action="void" data-ref="' + t.ref + '">Void</button>'
+      : "";
+
+    rows +=
+      "<tr>" +
+      "<td>" + t.ref + "</td>" +
+      "<td>" + safe(t.customer) + "</td>" +
+      "<td>" + safe(t.movie) + "</td>" +
+      "<td>" + t.date + " " + t.time + "</td>" +
+      "<td>" + t.seats.join(", ") + "</td>" +
+      "<td>" + money(t.total) + "</td>" +
+      "<td>" + t.method + "</td>" +
+      "<td>" + safe(t.cashier) + "</td>" +
+      '<td class="' + (t.status === "Voided" ? "voided" : "") + '">' + t.status + "</td>" +
+      '<td><button class="small-btn" data-action="receipt" data-ref="' + t.ref + '">Receipt</button> ' +
+      voidButton + "</td>" +
+      "</tr>";
+  });
+
+  if (rows === "") {
+    rows = '<tr><td colspan="10">No transactions found.</td></tr>';
+  }
+  $("transBody").innerHTML = rows;
+}
+
+// Receipt / Void buttons inside the table
+function onTableClick(event) {
+  const button = event.target.closest("button");
+  if (!button) return;
+
+  const ref = button.dataset.ref;
+
+  if (button.dataset.action === "receipt") {
+    showReceipt(ref);
+  }
+
+  if (button.dataset.action === "void") {
+    if (!confirm("Void transaction " + ref + "? The seats will be released.")) return;
+    const t = transactions.find(function (x) { return x.ref === ref; });
+    t.status = "Voided";
+    t.voidedBy = cashier.name;
+    saveTransactions();
+    showTransactions();
+    drawSeats();    // sold seats become available again
+  }
+}
+
+/* =====================================================
+   11. START THE APP (connect buttons to functions)
+   ===================================================== */
+
+function startApp() {
+  loadData();
+
+  // set up the sell page
+  fillMovieDropdown();
+  $("dateInput").value = today();
+  $("dateInput").min = today();
+  onMovieChange();
+
+  // sign in / out
+  $("loginForm").addEventListener("submit", signIn);
+  $("signOutBtn").addEventListener("click", signOut);
+
+  // tabs
+  $("tabSell").addEventListener("click", function () { showPage("sell"); });
+  $("tabTrans").addEventListener("click", function () { showPage("trans"); });
+
+  // sell page
+  $("movieSelect").addEventListener("change", onMovieChange);
+  $("dateInput").addEventListener("change", drawSeats);
+  $("timeSelect").addEventListener("change", drawSeats);
+  $("seatRows").addEventListener("click", onSeatClick);
+  $("payMethod").addEventListener("change", updatePanel);
+  $("cashInput").addEventListener("input", updateChange);
+  $("chargeBtn").addEventListener("click", charge);
+  $("clearBtn").addEventListener("click", clearSelection);
+
+  // transactions page
+  $("searchInput").addEventListener("input", showTransactions);
+  $("statusFilter").addEventListener("change", showTransactions);
+  $("transBody").addEventListener("click", onTableClick);
+
+  // receipt popup
+  $("printBtn").addEventListener("click", function () { window.print(); });
+  $("toTransBtn").addEventListener("click", function () { closeReceipt(); showPage("trans"); });
+  $("newSaleBtn").addEventListener("click", function () { closeReceipt(); showPage("sell"); });
+
+  showCorrectScreen();
+}
+
+startApp();
