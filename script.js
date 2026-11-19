@@ -15,7 +15,7 @@ const DEFAULT_MOVIES = [
     id: 2, title: "Spiderman Brand New Day", poster: "images/praying.png",
     genre: "Sci-Fi", minutes: 112, price: 280, room: 1,
     times: ["10:00 AM", "1:30 PM", "7:00 PM"],
-    description: "A shy office worker falls for a rising star, and love gets messy and funny."
+    description: "A forgotten Peter Parker protects New York alone, until a strange change in his body starts to threaten his existence, and the villains closing in on the city include one that no one can even see."
   },
   {
     id: 3, title: "Avengers Doomsday", poster: "images/avengers.jpg",
